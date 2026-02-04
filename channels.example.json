@@ -1,0 +1,10 @@
+[
+    {
+        "name": "Example Channel",
+        "identifier": "@ExampleChannel"
+    },
+    {
+        "name": "Another Channel",
+        "identifier": "https://www.youtube.com/@AnotherChannel"
+    }
+]

@@ -1,0 +1,18 @@
+run:
+  timezone: "Europe/Vienna"
+  max_videos_per_channel: 1
+
+channels: [] # Channels are now managed dynamically via the Bot
+
+telegram:
+  chat_id: 123456789      # integer or string; where to send the report
+
+llm:
+  api_base: "http://127.0.0.1:1234"   # local LM Studio endpoint
+  model: "zai-org/glm-4.7-flash"
+  temperature: 0.2
+  max_sentences_per_video: 5
+  language: "en"
+  include_links: true
+  group_by_channel: true
+  title: "YouTube Daily Review"
