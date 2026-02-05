@@ -70,7 +70,18 @@ class LangChainUtils:
 
     def classify_intent(self, text: str) -> Dict[str, Any]:
         try:
-            return self.intent_chain.invoke({"text": text})
+            result = self.intent_chain.invoke({"text": text})
+            
+            # Validate that result is a dict with expected structure
+            if not isinstance(result, dict):
+                logger.warning(f"Intent classifier returned non-dict: {type(result).__name__} = {result}")
+                return {"action": "UNKNOWN"}
+            
+            if "action" not in result:
+                logger.warning(f"Intent classifier returned dict without 'action' key: {result}")
+                return {"action": "UNKNOWN", **result}
+            
+            return result
         except Exception as e:
             logger.error(f"Intent classification failed: {e}")
             return {"action": "UNKNOWN"}
