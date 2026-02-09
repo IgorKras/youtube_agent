@@ -1,7 +1,7 @@
 import os
 import yaml
-from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from dataclasses import dataclass
+from typing import Optional, Union
 
 @dataclass
 class RunConfig:
@@ -44,7 +44,9 @@ def load_config(path: str) -> Config:
         raise FileNotFoundError(f"Config file not found: {path}")
 
     with open(path, 'r', encoding='utf-8') as f:
-        data = yaml.safe_load(f)
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError("Config root must be a YAML mapping/object.")
 
     # Run Config
     run_data = data.get('run', {})

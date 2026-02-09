@@ -2,8 +2,9 @@ import logging
 import os
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dotenv import load_dotenv
 import requests
 
@@ -14,11 +15,25 @@ from .config import Config
 from .youtube_client import YouTubeClient, Video
 from .transcript_client import TranscriptClient
 from .llm_client import LLMClient
-from .telegram_client import TelegramClient
+from .telegram_client import TelegramClient, escape_markdown
 from .channel_manager import ChannelManager
 from .langchain_utils import LangChainUtils
 
 logger = logging.getLogger(__name__)
+
+
+def get_current_date_str(timezone_name: str, now_utc: Optional[datetime] = None) -> str:
+    """Return current date in configured timezone (YYYY-MM-DD)."""
+    base_now = now_utc or datetime.now(timezone.utc)
+    if base_now.tzinfo is None:
+        base_now = base_now.replace(tzinfo=timezone.utc)
+
+    try:
+        tz = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        logger.warning("Invalid timezone '%s'; falling back to UTC", timezone_name)
+        tz = timezone.utc
+    return base_now.astimezone(tz).strftime("%Y-%m-%d")
 
 class ReviewAgent:
     def __init__(self, config: Config):
@@ -105,8 +120,9 @@ class ReviewAgent:
 
     def _generate_report(self, report_data: List[Dict[str, Any]]) -> str:
         lines = []
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        lines.append(f"📺 *{self.config.llm.title}* ({date_str})")
+        date_str = get_current_date_str(self.config.run.timezone)
+        safe_report_title = escape_markdown(self.config.llm.title)
+        lines.append(f"📺 *{safe_report_title}* ({date_str})")
         lines.append("")
 
         if self.config.llm.group_by_channel:
@@ -119,14 +135,17 @@ class ReviewAgent:
                 grouped[ch].append(item)
             
             for channel_name, items in grouped.items():
-                lines.append(f"**{channel_name}**")
+                safe_channel_name = escape_markdown(channel_name)
+                lines.append(f"*{safe_channel_name}*")
                 for idx, item in enumerate(items, 1):
                     video = item['video']
                     summary = item['summary']
+                    safe_title = escape_markdown(video.title)
+                    safe_summary = escape_markdown(summary)
                     
-                    lines.append(f"{idx}. *{video.title}*")
+                    lines.append(f"{idx}. *{safe_title}*")
                     lines.append(f"   📅 {video.published_at.strftime('%Y-%m-%d')}")
-                    lines.append(f"   📝 {summary}")
+                    lines.append(f"   📝 {safe_summary}")
                     if self.config.llm.include_links:
                         lines.append(f"   🔗 [Link]({video.url})")
                     lines.append("")
@@ -137,10 +156,13 @@ class ReviewAgent:
                 video = item['video']
                 summary = item['summary']
                 channel_name = item['channel']
+                safe_title = escape_markdown(video.title)
+                safe_summary = escape_markdown(summary)
+                safe_channel_name = escape_markdown(channel_name)
                 
-                lines.append(f"{idx}. *{video.title}* ({channel_name})")
+                lines.append(f"{idx}. *{safe_title}* ({safe_channel_name})")
                 lines.append(f"   📅 {video.published_at.strftime('%Y-%m-%d')}")
-                lines.append(f"   📝 {summary}")
+                lines.append(f"   📝 {safe_summary}")
                 if self.config.llm.include_links:
                     lines.append(f"   🔗 [Link]({video.url})")
                 lines.append("")
@@ -271,7 +293,7 @@ class ReviewAgent:
         
         videos = self.yt_client.get_latest_videos(identifier, max_videos=1)
         if videos:
-            channel_name = videos[0].channel_name
+            channel_name = videos[0].channel_name or identifier
             if self.channel_manager.add_channel(channel_name, identifier):
                 self.telegram_client.send_message(chat_id, f"✅ Added channel: {channel_name}")
             else:
@@ -400,5 +422,5 @@ I can understand natural language! Try:
         self.is_running = False
         try:
             self.telegram_client.send_message(self.config.telegram.chat_id, "🛑 Bot stopped.")
-        except:
-            pass
+        except Exception as e:
+            logger.warning("Failed to send bot stop notification: %s", e)
