@@ -1,13 +1,16 @@
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from typing import List, Optional
+from urllib.parse import urlparse
 from dateutil import parser
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 logger = logging.getLogger(__name__)
+CHANNEL_ID_RE = re.compile(r"^UC[a-zA-Z0-9_-]{22}$")
 
 @dataclass
 class Video:
@@ -32,22 +35,83 @@ class YouTubeClient:
     @lru_cache(maxsize=100)
     def get_channel_id_from_handle(self, handle: str) -> Optional[str]:
         """Gets channel ID from a channel handle (e.g., @Fireship). Results are cached."""
+        normalized = (handle or "").strip()
+        if normalized.startswith("@"):
+            normalized = normalized[1:]
+        if not normalized:
+            return None
+
         try:
+            # Exact handle resolution when supported by the API.
+            channels_response = self.service.channels().list(
+                forHandle=normalized,
+                part='id'
+            ).execute()
+            items = channels_response.get("items", [])
+            if items:
+                return items[0]["id"]
+
+            # Fallback for compatibility when forHandle does not resolve.
             search_response = self.service.search().list(
-                q=handle,
+                q=f"@{normalized}",
                 type='channel',
                 part='id',
                 maxResults=1
             ).execute()
-            if not search_response.get('items'):
-                return None
-            return search_response['items'][0]['id']['channelId']
+            search_items = search_response.get("items", [])
+            if search_items:
+                return search_items[0]["id"]["channelId"]
+            return None
         except HttpError as e:
             logger.error(f"HTTP error resolving channel handle '{handle}': {e}")
             return None
         except Exception as e:
             logger.error(f"Error resolving channel handle '{handle}': {e}")
             return None
+
+    def _resolve_channel_id_from_identifier(self, identifier: str) -> Optional[str]:
+        """Resolve a channel identifier from channel ID, handle, or supported YouTube URL."""
+        value = (identifier or "").strip()
+        if not value:
+            return None
+
+        if CHANNEL_ID_RE.match(value):
+            return value
+
+        if value.startswith("@"):
+            return self.get_channel_id_from_handle(value)
+
+        parsed = urlparse(value)
+        if parsed.scheme and parsed.netloc:
+            host = parsed.netloc.lower()
+            if host.startswith("www.") or host.startswith("m."):
+                host = host.split(".", 1)[1]
+
+            if host.endswith("youtube.com"):
+                segments = [seg for seg in parsed.path.split("/") if seg]
+                if not segments:
+                    return None
+
+                first = segments[0]
+                if first.startswith("@"):
+                    return self.get_channel_id_from_handle(first)
+
+                if first.lower() == "channel" and len(segments) >= 2:
+                    channel_id = segments[1]
+                    if CHANNEL_ID_RE.match(channel_id):
+                        return channel_id
+                    return None
+
+                if first.lower() in {"c", "user"} and len(segments) >= 2:
+                    # Best-effort fallback for custom channel URLs.
+                    return self.get_channel_id_from_handle(segments[1])
+
+            return None
+
+        # Best-effort fallback for plain handles without leading "@".
+        if re.match(r"^[A-Za-z0-9._-]+$", value):
+            return self.get_channel_id_from_handle(value)
+        return None
 
     def get_uploads_playlist_id(self, channel_id: str) -> Optional[str]:
         """Gets the ID of the 'uploads' playlist for a given channel ID."""
@@ -70,15 +134,7 @@ class YouTubeClient:
         """
         Gets the latest videos from a channel using its ID, handle, or full URL.
         """
-        channel_id = None
-        if identifier.startswith("UC") and len(identifier) == 24:
-            channel_id = identifier
-        elif identifier.startswith("@"):
-            channel_id = self.get_channel_id_from_handle(identifier)
-        elif "youtube.com/" in identifier:
-            handle = identifier.split('/')[-1]
-            if handle.startswith('@'):
-                 channel_id = self.get_channel_id_from_handle(handle)
+        channel_id = self._resolve_channel_id_from_identifier(identifier)
 
         if not channel_id:
             logger.error(f"Could not resolve a valid Channel ID from identifier: {identifier}")
